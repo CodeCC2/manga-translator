@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Test files
+test_*.py
+*_test.py
+*_test.png
+
+# Temporary scripts
+download_font.py
+fix_syntax.py
+
+# Logs
+*.log
+uvicorn.*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+dist/
+build/
+*.egg-info/
