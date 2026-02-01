@@ -18,6 +18,7 @@ from PIL import Image, ImageDraw, ImageFont
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 import fitz  # PyMuPDF
 import img2pdf
+from manga_ocr import MangaOcr
 
 
 DEFAULT_MODEL = os.getenv("NMT_MODEL", "facebook/nllb-200-3.3B")
@@ -50,9 +51,9 @@ class MangaPipeline:
         model_name: str = DEFAULT_MODEL,
         target_lang: str = "th",
         font_path: Path = DEFAULT_FONT,
-        max_font_size: int = 52,
-        min_font_size: int = 18,
-        stroke_width: int = 2,
+        max_font_size: int = 72,
+        min_font_size: int = 12,
+        stroke_width: int = 3,
     ) -> None:
         self.model_name = model_name
         self.target_lang = target_lang
@@ -65,6 +66,9 @@ class MangaPipeline:
 
         # OCR languages: English + Japanese
         self.reader = easyocr.Reader(["en", "ja"], gpu=torch.cuda.is_available())
+        
+        # Manga-OCR for Japanese text recognition (more accurate for manga)
+        self.manga_ocr = MangaOcr()
 
         # Initialize translation model once, kept in memory
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
@@ -86,7 +90,7 @@ class MangaPipeline:
         Process a single image and return a dict with base64 image and region metadata.
         """
         image = Image.open(BytesIO(image_bytes)).convert("RGB")
-        regions = self._run_ocr(image)
+        regions = self._run_ocr(image, source_lang=source_lang)
         if not regions:
             return {
                 "image_base64": self._encode_image(image),
@@ -158,17 +162,38 @@ class MangaPipeline:
             },
         }
 
-    def _run_ocr(self, image: Image.Image) -> List[TextRegion]:
+    def _run_ocr(self, image: Image.Image, source_lang: str = "en") -> List[TextRegion]:
+        """Run OCR on image. Uses EasyOCR for detection, Manga-OCR for Japanese text."""
         np_image = np.array(image)
+        # Use EasyOCR to detect text regions (bounding boxes)
         results = self.reader.readtext(np_image, detail=1, paragraph=False)
         regions: List[TextRegion] = []
+        
+        use_manga_ocr = source_lang.lower() in ("ja", "jp", "jpn_jpan")
+        
         for item in results:
             # easyocr returns [bbox, text, confidence]
-            bbox, text, confidence = item
-            text = text.strip()
+            bbox, easyocr_text, confidence = item
+            points = [(int(x), int(y)) for x, y in bbox]
+            
+            if use_manga_ocr:
+                # Crop the region and use Manga-OCR for better Japanese recognition
+                xs = [p[0] for p in points]
+                ys = [p[1] for p in points]
+                x_min, x_max = max(0, min(xs)), min(image.width, max(xs))
+                y_min, y_max = max(0, min(ys)), min(image.height, max(ys))
+                
+                if x_max > x_min and y_max > y_min:
+                    cropped = image.crop((x_min, y_min, x_max, y_max))
+                    text = self.manga_ocr(cropped)
+                else:
+                    text = easyocr_text
+            else:
+                text = easyocr_text
+            
+            text = text.strip() if text else ""
             if not text:
                 continue
-            points = [(int(x), int(y)) for x, y in bbox]
             regions.append(TextRegion(box=points, text=text, confidence=float(confidence)))
         return regions
 
@@ -230,16 +255,22 @@ class MangaPipeline:
             xs, ys = zip(*region.box)
             x_min, x_max = min(xs), max(xs)
             y_min, y_max = min(ys), max(ys)
-            box_w = max(8, x_max - x_min)
-            box_h = max(8, y_max - y_min)
+            
+            # Add padding inside the box (10% on each side)
+            padding_x = max(4, int((x_max - x_min) * 0.08))
+            padding_y = max(4, int((y_max - y_min) * 0.08))
+            
+            box_w = max(20, x_max - x_min - padding_x * 2)
+            box_h = max(20, y_max - y_min - padding_y * 2)
 
             font, wrapped_text = self._fit_text(draw, translated, box_w, box_h)
             text_bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=font, stroke_width=self.stroke_width)
             text_w = text_bbox[2] - text_bbox[0]
             text_h = text_bbox[3] - text_bbox[1]
 
-            x = x_min + (box_w - text_w) / 2
-            y = y_min + (box_h - text_h) / 2
+            # Center text in the original box (including padding)
+            x = x_min + padding_x + (box_w - text_w) / 2
+            y = y_min + padding_y + (box_h - text_h) / 2
 
             # Draw white text with dark stroke for readability
             draw.multiline_text(

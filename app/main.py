@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import uuid
 from pathlib import Path
+from typing import Dict
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from PIL import UnidentifiedImageError
@@ -12,6 +16,9 @@ from .pipeline import MangaPipeline
 
 
 app = FastAPI(title="Manga Translator", version="0.1.0")
+
+# Global progress tracking
+progress_store: Dict[str, dict] = {}
 
 
 @app.on_event("startup")
@@ -64,6 +71,7 @@ async def process_image(
 async def process_pdf(
     file: UploadFile = File(...),
     source_lang: str = Query("en", description="Source language: en or ja"),
+    task_id: str = Query(None, description="Task ID for progress tracking"),
 ) -> dict:
     if not file.filename:
         raise HTTPException(status_code=400, detail="กรุณาอัพโหลดไฟล์ PDF")
@@ -73,12 +81,54 @@ async def process_pdf(
     if not pdf_bytes:
         raise HTTPException(status_code=400, detail="ไม่พบข้อมูล PDF")
 
+    # Create progress callback
+    current_task_id = task_id or str(uuid.uuid4())
+    
+    def progress_callback(current_page: int, total_pages: int):
+        progress_store[current_task_id] = {
+            "current": current_page,
+            "total": total_pages,
+            "status": "processing"
+        }
+    
+    progress_store[current_task_id] = {"current": 0, "total": 0, "status": "starting"}
+    
     pipeline: MangaPipeline = app.state.pipeline
     try:
-        result = await run_in_threadpool(lambda: pipeline.process_pdf(pdf_bytes, source_lang=source_lang))
+        result = await run_in_threadpool(
+            lambda: pipeline.process_pdf(pdf_bytes, source_lang=source_lang, progress_callback=progress_callback)
+        )
+        progress_store[current_task_id] = {"current": result["total_pages"], "total": result["total_pages"], "status": "done"}
+        result["task_id"] = current_task_id
     except Exception as exc:
+        progress_store[current_task_id] = {"current": 0, "total": 0, "status": "error", "error": str(exc)}
         raise HTTPException(status_code=500, detail=f"ประมวลผล PDF ไม่สำเร็จ: {exc}") from exc
     return result
+
+
+@app.get("/api/progress/{task_id}")
+async def get_progress(task_id: str) -> dict:
+    """Get progress for a specific task."""
+    if task_id not in progress_store:
+        return {"current": 0, "total": 0, "status": "unknown"}
+    return progress_store[task_id]
+
+
+@app.get("/api/progress-stream/{task_id}")
+async def progress_stream(task_id: str):
+    """SSE endpoint for real-time progress updates."""
+    async def event_generator():
+        while True:
+            if task_id in progress_store:
+                data = progress_store[task_id]
+                yield f"data: {json.dumps(data)}\n\n"
+                if data.get("status") in ("done", "error"):
+                    break
+            else:
+                yield f"data: {json.dumps({'current': 0, 'total': 0, 'status': 'waiting'})}\n\n"
+            await asyncio.sleep(0.5)
+    
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @app.get("/health")
