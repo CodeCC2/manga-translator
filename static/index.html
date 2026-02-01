@@ -160,6 +160,12 @@
       flex-wrap: wrap;
       gap: 10px;
     }
+    .download-btn {
+      background: linear-gradient(135deg, #51c0ff, #5cf0c5);
+      margin-top: 10px;
+      display: none;
+    }
+    .download-btn.show { display: block; }
   </style>
 </head>
 <body>
@@ -167,15 +173,15 @@
     <header>
       <div>
         <h1>Local Manga Translator</h1>
-        <div class="hint">อัพโหลดภาพมังงะ → OCR → แปลเป็นไทย → ลบกรอบเดิม → เขียนข้อความใหม่</div>
+        <div class="hint">อัพโหลดภาพหรือ PDF มังงะ → OCR → แปลเป็นไทย → ลบกรอบเดิม → เขียนข้อความใหม่</div>
       </div>
       <div class="badge">Offline NMT + OCR</div>
     </header>
 
     <div class="grid">
       <section class="card">
-        <h2>อัพโหลดภาพ</h2>
-        <div class="hint">รองรับ .png / .jpg | โพรเซสจะรันบนเครื่องคุณ</div>
+        <h2>อัพโหลดไฟล์</h2>
+        <div class="hint">รองรับ .png / .jpg / .pdf | โพรเซสจะรันบนเครื่องคุณ</div>
         <form id="upload-form">
           <label class="small" style="display:block;margin-bottom:6px;">ภาษาต้นทาง</label>
           <div style="display:flex;gap:10px;margin-bottom:6px;">
@@ -187,7 +193,7 @@
             </label>
           </div>
           <div class="dropzone">
-            <input id="file-input" name="file" type="file" accept="image/png,image/jpeg,image/jpg" required />
+            <input id="file-input" name="file" type="file" accept="image/png,image/jpeg,image/jpg,application/pdf" required />
           </div>
           <button id="submit-btn" type="submit">เริ่มแปล</button>
           <div class="status" id="status">พร้อมประมวลผล</div>
@@ -200,13 +206,14 @@
           <span class="small">รอผลลัพธ์</span>
           <img id="result-image" alt="" hidden />
         </div>
+        <button id="download-btn" class="download-btn">📥 ดาวน์โหลด PDF</button>
         <div class="hint">กล่องข้อความที่ตรวจพบ</div>
         <ul id="region-list"></ul>
       </section>
     </div>
     <footer>
       <span class="pill accent">Tip: ใช้ GPU จะเร็วขึ้น ถ้ามี</span>
-      <span class="small">ใช้ EasyOCR + NLLB200 EN→TH | ฟอนต์ NotoSansThai</span>
+      <span class="small">ใช้ EasyOCR + NLLB200 EN→TH | ฟอนต์ Sarabun</span>
     </footer>
   </div>
   <script>
@@ -217,6 +224,9 @@
     const previewImg = document.getElementById('result-image');
     const regionList = document.getElementById('region-list');
     const preview = document.getElementById('preview');
+    const downloadBtn = document.getElementById('download-btn');
+
+    let currentPdfBase64 = null;
 
     function setStatus(text, loading = false, error = false) {
       statusEl.textContent = text;
@@ -239,31 +249,65 @@
       });
     }
 
+    function isPdf(file) {
+      return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    }
+
+    function downloadPdf() {
+      if (!currentPdfBase64) return;
+      const link = document.createElement('a');
+      link.href = `data:application/pdf;base64,${currentPdfBase64}`;
+      link.download = 'translated_manga.pdf';
+      link.click();
+    }
+
+    downloadBtn.addEventListener('click', downloadPdf);
+
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       if (!fileInput.files.length) {
         setStatus('เลือกไฟล์ก่อน', false, true);
         return;
       }
+
+      const file = fileInput.files[0];
       const sourceLang = new FormData(form).get('source_lang') || 'en';
-      setStatus('กำลังประมวลผล...', true);
+      const isPdfFile = isPdf(file);
+      
+      setStatus(isPdfFile ? 'กำลังประมวลผล PDF... (อาจใช้เวลานาน)' : 'กำลังประมวลผล...', true);
       previewImg.hidden = true;
+      downloadBtn.classList.remove('show');
+      currentPdfBase64 = null;
 
       const body = new FormData();
-      body.append('file', fileInput.files[0]);
+      body.append('file', file);
 
       try {
-        const res = await fetch(`/api/process?source_lang=${sourceLang}`, { method: 'POST', body });
+        const endpoint = isPdfFile ? '/api/process-pdf' : '/api/process';
+        const res = await fetch(`${endpoint}?source_lang=${sourceLang}`, { method: 'POST', body });
+        
         if (!res.ok) {
           const detail = await res.json().catch(() => ({}));
           throw new Error(detail?.detail || 'ประมวลผลไม่สำเร็จ');
         }
+        
         const data = await res.json();
-        const url = `data:image/png;base64,${data.image_base64}`;
-        previewImg.src = url;
-        previewImg.hidden = false;
+        
+        if (isPdfFile) {
+          // PDF result
+          currentPdfBase64 = data.pdf_base64;
+          downloadBtn.classList.add('show');
+          previewImg.hidden = true;
+          setStatus(`แปล PDF สำเร็จ! ${data.total_pages} หน้า | ${data.meta?.translations || 0} กล่อง`, false);
+        } else {
+          // Image result
+          const url = `data:image/png;base64,${data.image_base64}`;
+          previewImg.src = url;
+          previewImg.hidden = false;
+          setStatus(`แปลแล้ว ${data.meta?.translations || 0} กล่อง | โมเดล ${data.meta?.model}`, false);
+        }
+        
         renderRegions(data.regions);
-        setStatus(`แปลแล้ว ${data.meta?.translations || 0} กล่อง | โมเดล ${data.meta?.model}`, false);
       } catch (err) {
         console.error(err);
         setStatus(err.message || 'เกิดข้อผิดพลาด', false, true);

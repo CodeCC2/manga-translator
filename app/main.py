@@ -60,6 +60,27 @@ async def process_image(
     return result
 
 
+@app.post("/api/process-pdf")
+async def process_pdf(
+    file: UploadFile = File(...),
+    source_lang: str = Query("en", description="Source language: en or ja"),
+) -> dict:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="กรุณาอัพโหลดไฟล์ PDF")
+    if file.content_type and file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="ไฟล์ต้องเป็น PDF เท่านั้น")
+    pdf_bytes = await file.read()
+    if not pdf_bytes:
+        raise HTTPException(status_code=400, detail="ไม่พบข้อมูล PDF")
+
+    pipeline: MangaPipeline = app.state.pipeline
+    try:
+        result = await run_in_threadpool(lambda: pipeline.process_pdf(pdf_bytes, source_lang=source_lang))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"ประมวลผล PDF ไม่สำเร็จ: {exc}") from exc
+    return result
+
+
 @app.get("/health")
 async def health() -> dict:
     pipeline: MangaPipeline | None = getattr(app.state, "pipeline", None)

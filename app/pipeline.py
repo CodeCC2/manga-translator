@@ -16,9 +16,11 @@ import numpy as np
 import torch
 from PIL import Image, ImageDraw, ImageFont
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+import fitz  # PyMuPDF
+import img2pdf
 
 
-DEFAULT_MODEL = os.getenv("NMT_MODEL", "facebook/nllb-200-distilled-1.3B")
+DEFAULT_MODEL = os.getenv("NMT_MODEL", "facebook/nllb-200-3.3B")
 DEFAULT_FONT = Path(__file__).resolve().parent.parent / "assets" / "fonts" / "Sarabun-Regular.ttf"
 FALLBACK_FONT = Path(__file__).resolve().parent.parent / "assets" / "fonts" / "NotoSans-Regular.ttf"
 
@@ -74,7 +76,10 @@ class MangaPipeline:
         else:
             self.src_lang = "en"
             self.tgt_lang = "th"
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name).to(self.device)
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(
+            self.model_name, 
+            torch_dtype=torch.float16
+        ).to(self.device)
 
     def process_image(self, image_bytes: bytes, source_lang: str = "en") -> dict:
         """
@@ -102,6 +107,52 @@ class MangaPipeline:
             "meta": {
                 "translations": len(translations),
                 "ocr_regions": len(regions),
+                "device": self.device,
+                "model": self.model_name,
+            },
+        }
+
+    def process_pdf(self, pdf_bytes: bytes, source_lang: str = "en", progress_callback=None) -> dict:
+        """
+        Process a PDF file: convert pages to images, translate each, combine back to PDF.
+        """
+        # Open PDF from bytes
+        pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        total_pages = len(pdf_doc)
+        
+        processed_images: List[bytes] = []
+        all_regions: List[dict] = []
+        
+        for page_num in range(total_pages):
+            if progress_callback:
+                progress_callback(page_num + 1, total_pages)
+            
+            # Convert PDF page to image (300 DPI for good quality)
+            page = pdf_doc[page_num]
+            mat = fitz.Matrix(300 / 72, 300 / 72)  # 300 DPI
+            pix = page.get_pixmap(matrix=mat)
+            img_bytes = pix.tobytes("png")
+            
+            # Process the image
+            result = self.process_image(img_bytes, source_lang=source_lang)
+            
+            # Store processed image
+            processed_images.append(base64.b64decode(result["image_base64"]))
+            all_regions.extend(result.get("regions", []))
+        
+        pdf_doc.close()
+        
+        # Combine images back to PDF
+        pdf_output = img2pdf.convert(processed_images)
+        pdf_base64 = base64.b64encode(pdf_output).decode("utf-8")
+        
+        return {
+            "pdf_base64": pdf_base64,
+            "total_pages": total_pages,
+            "regions": all_regions,
+            "meta": {
+                "translations": len(all_regions),
+                "pages_processed": total_pages,
                 "device": self.device,
                 "model": self.model_name,
             },
