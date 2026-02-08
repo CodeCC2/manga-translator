@@ -1,84 +1,66 @@
-# Local Manga Translator (EN → TH)
+# 🎌 Local Manga Translator
 
-เว็บแอปสำหรับแปลมังงะจากภาษาอังกฤษเป็นภาษาไทยแบบ local - ไม่ต้องพึ่ง API ภายนอก
+แปลมังงะอัตโนมัติด้วย AI - รองรับทั้ง **รูปภาพ** และ **PDF** | EN/JA → TH
 
-## ✨ ผลลัพธ์
+## ✨ Features
 
-| ก่อนแปล (Original) | หลังแปล (Translated) |
-|:------------------:|:--------------------:|
+- 📖 **PDF Support** - แปลทั้งไฟล์ PDF พร้อม progress bar
+- 🎯 **Manga-OCR** - อ่านข้อความญี่ปุ่นในมังงะได้แม่นยำ
+- 🌐 **Offline** - ทำงาน local ไม่ต้องพึ่ง API
+- ⚡ **GPU Acceleration** - CUDA (Windows) / MPS (Mac)
+
+## ผลลัพธ์
+
+| Before | After |
+|:------:|:-----:|
 | ![Before](assets/images/before.jpg) | ![After](assets/images/after.png) |
 
-## 🚀 Quick Start
+## 🚀 Installation
 
-1. **ติดตั้ง dependencies:**
+### Windows
+
+ดับเบิ้ลคลิก `install.bat` แล้วเลือก:
+- กด **1** = CPU
+- กด **2** = GPU (NVIDIA)
+
+### Mac
+
 ```bash
-pip install -r requirements.txt
+chmod +x install.sh
+./install.sh
+```
+เลือก:
+- กด **1** = CPU (Intel Mac)
+- กด **2** = MPS (Apple Silicon M1/M2/M3)
+
+### Manual
+
+```bash
+# CPU
+python3 -m pip install -r requirements.txt
+
+# GPU (NVIDIA - Windows/Linux)
+python3 -m pip install -r requirements.txt
+python3 -m pip uninstall torch torchvision -y
+python3 -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 ```
 
-2. **รัน server:**
+## ▶️ Run
+
 ```bash
 python -m uvicorn app.main:app --reload --port 8000
 ```
 
-3. **เปิดเบราว์เซอร์:** http://localhost:8000
+เปิด http://localhost:8000
 
-> ⚠️ ครั้งแรกจะดาวน์โหลดโมเดล (~2GB) อาจใช้เวลา 1-3 นาที
+## 💾 Requirements
 
-## 🔧 สถาปัตยกรรม
-
-| Component | Technology |
-|-----------|------------|
-| **OCR** | EasyOCR (EN/JA) |
-| **Translation** | NLLB-200 (`facebook/nllb-200-distilled-1.3B`) |
-| **Text Removal** | OpenCV Inpainting (Telea) |
-| **Text Redraw** | Pillow + Sarabun Font |
-
-## 📡 API
-
-### POST /api/process
-อัพโหลดรูปภาพเพื่อแปล
-
-```bash
-curl -X POST -F "file=@manga.jpg" http://localhost:8000/api/process
-```
-
-**Query params:**
-- `source_lang` - ภาษาต้นฉบับ: `en` (default) หรือ `ja`
-
-**Response:**
-```json
-{
-  "image_base64": "...",
-  "regions": [...],
-  "meta": {"model": "...", "device": "cuda/cpu"}
-}
-```
-
-### GET /health
-ตรวจสอบสถานะ server
-
-## ⚙️ การปรับแต่ง
-
-แก้ไขใน `app/pipeline.py`:
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `max_font_size` | ขนาด font สูงสุด | 52 |
-| `min_font_size` | ขนาด font ต่ำสุด | 18 |
-| `stroke_width` | ความหนาเส้นขอบ | 2 |
-
-## 💻 GPU Support
-
-ถ้ามี NVIDIA GPU:
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-```
-
-## 📝 หมายเหตุ
-
-- **Inpainting:** เหมาะกับพื้นหลังเรียบ/ไล่โทน พื้นหลังซับซ้อนอาจต้องใช้ LaMa
-- **OCR:** อาจพลาดข้อความเอียงมากหรือ SFX
-- **Font:** ใช้ Sarabun รองรับไทย + อังกฤษ + เครื่องหมายวรรคตอน
+| Platform | Mode | RAM | GPU Memory | Speed |
+|----------|------|-----|------------|-------|
+| Windows | CPU | ~13GB | - | 🐢 |
+| Windows | CUDA | ~4GB | ~8GB VRAM | ⚡ |
+| Mac Intel | CPU | ~13GB | - | 🐢 |
+| Mac M1/M2/M3 | MPS | ~8GB | Unified | ⚡ |
 
 ---
 

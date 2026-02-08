@@ -62,7 +62,14 @@ class MangaPipeline:
         self.max_font_size = max_font_size
         self.min_font_size = min_font_size
         self.stroke_width = stroke_width
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # Device selection: CUDA > MPS > CPU
+        if torch.cuda.is_available():
+            self.device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            self.device = "mps"
+        else:
+            self.device = "cpu"
 
         # OCR languages: English + Japanese
         self.reader = easyocr.Reader(["en", "ja"], gpu=torch.cuda.is_available())
@@ -80,9 +87,11 @@ class MangaPipeline:
         else:
             self.src_lang = "en"
             self.tgt_lang = "th"
+        # Use FP16 only on GPU, FP32 on CPU (FP16 not supported for LayerNorm on CPU)
+        model_dtype = torch.float16 if self.device == "cuda" else torch.float32
         self.model = AutoModelForSeq2SeqLM.from_pretrained(
             self.model_name, 
-            torch_dtype=torch.float16
+            torch_dtype=model_dtype
         ).to(self.device)
 
     def process_image(self, image_bytes: bytes, source_lang: str = "en") -> dict:
@@ -166,14 +175,21 @@ class MangaPipeline:
         """Run OCR on image. Uses EasyOCR for detection, Manga-OCR for Japanese text."""
         np_image = np.array(image)
         # Use EasyOCR to detect text regions (bounding boxes)
-        results = self.reader.readtext(np_image, detail=1, paragraph=False)
+        # paragraph=True groups text into blocks (better for translation context)
+        results = self.reader.readtext(np_image, detail=1, paragraph=True)
         regions: List[TextRegion] = []
         
         use_manga_ocr = source_lang.lower() in ("ja", "jp", "jpn_jpan")
         
         for item in results:
-            # easyocr returns [bbox, text, confidence]
-            bbox, easyocr_text, confidence = item
+            # paragraph=True returns [bbox, text] without confidence
+            # paragraph=False returns [bbox, text, confidence]
+            if len(item) == 3:
+                bbox, easyocr_text, confidence = item
+            else:
+                bbox, easyocr_text = item
+                confidence = 1.0
+            
             points = [(int(x), int(y)) for x, y in bbox]
             
             if use_manga_ocr:
